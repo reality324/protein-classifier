@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Root level data directories (不要上传大文件)
+# 使用 /data/ 只匹配根目录的 data/
+/data/
+/datasets/
+*.parquet
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.csv
+*.tsv
+
+# Root level models directory
+/models/
+/models_dir/
+*.pt
+*.pth
+checkpoints/
+logs/
+runs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Temp
+tmp/
+temp/
+*.log
+
+# PyTorch cache
+.pt/
+.torch/
+
+# Cache directories
+.cache/
