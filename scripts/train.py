@@ -81,13 +81,53 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
-def load_data(train_path, val_path, test_path, batch_size, num_workers):
+def load_data(train_path, val_path, test_path, batch_size, num_workers, embedding_method='onehot'):
     """加载数据集"""
     print("加载数据集...")
     
-    train_dataset = ProteinDataset(Path(train_path))
-    val_dataset = ProteinDataset(Path(val_path))
-    test_dataset = ProteinDataset(Path(test_path))
+    import pandas as pd
+    from src.data.featurization import get_feature_extractor
+    
+    # 读取数据
+    train_df = pd.read_parquet(train_path)
+    val_df = pd.read_parquet(val_path)
+    test_df = pd.read_parquet(test_path)
+    
+    # 提取特征
+    print(f"提取 {embedding_method} 特征...")
+    extractor = get_feature_extractor(embedding_method)
+    
+    train_features = extractor.extract(train_df['sequence'].tolist())
+    val_features = extractor.extract(val_df['sequence'].tolist())
+    test_features = extractor.extract(test_df['sequence'].tolist())
+    
+    # 创建数据集
+    train_dataset = ProteinDataset(
+        features=train_features,
+        ec_labels=np.stack(train_df['ec_encoded'].values) if 'ec_encoded' in train_df.columns else None,
+        loc_labels=train_df['loc_encoded'].values if 'loc_encoded' in train_df.columns else None,
+        func_labels=np.stack(train_df['func_encoded'].values) if 'func_encoded' in train_df.columns else None,
+        sequences=train_df['sequence'].tolist(),
+        ids=train_df['id'].tolist(),
+    )
+    
+    val_dataset = ProteinDataset(
+        features=val_features,
+        ec_labels=np.stack(val_df['ec_encoded'].values) if 'ec_encoded' in val_df.columns else None,
+        loc_labels=val_df['loc_encoded'].values if 'loc_encoded' in val_df.columns else None,
+        func_labels=np.stack(val_df['func_encoded'].values) if 'func_encoded' in val_df.columns else None,
+        sequences=val_df['sequence'].tolist(),
+        ids=val_df['id'].tolist(),
+    )
+    
+    test_dataset = ProteinDataset(
+        features=test_features,
+        ec_labels=np.stack(test_df['ec_encoded'].values) if 'ec_encoded' in test_df.columns else None,
+        loc_labels=test_df['loc_encoded'].values if 'loc_encoded' in test_df.columns else None,
+        func_labels=np.stack(test_df['func_encoded'].values) if 'func_encoded' in test_df.columns else None,
+        sequences=test_df['sequence'].tolist(),
+        ids=test_df['id'].tolist(),
+    )
     
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True,
@@ -245,9 +285,26 @@ def main():
     # 加载数据集获取类别数
     print("获取数据集信息...")
     train_df = pd.read_parquet(args.train_data)
-    ec_num_classes = len(train_df['ec_encoded'].iloc[0]) if 'ec_encoded' in train_df.columns else 500
-    loc_num_classes = len(train_df['loc_encoded'].iloc[0]) if 'loc_encoded' in train_df.columns else 30
-    func_num_classes = len(train_df['func_encoded'].iloc[0]) if 'func_encoded' in train_df.columns else 50
+    
+    # 获取 ec_encoded 数组长度
+    if 'ec_encoded' in train_df.columns:
+        ec_sample = train_df['ec_encoded'].iloc[0]
+        ec_num_classes = len(ec_sample) if hasattr(ec_sample, '__len__') else int(ec_sample) + 1
+    else:
+        ec_num_classes = 500
+    
+    # 获取 loc_encoded 类别数 (单标签)
+    if 'loc_encoded' in train_df.columns:
+        loc_num_classes = int(train_df['loc_encoded'].max()) + 1
+    else:
+        loc_num_classes = 30
+    
+    # 获取 func_encoded 数组长度
+    if 'func_encoded' in train_df.columns:
+        func_sample = train_df['func_encoded'].iloc[0]
+        func_num_classes = len(func_sample) if hasattr(func_sample, '__len__') else int(func_sample) + 1
+    else:
+        func_num_classes = 50
     
     print(f"输入维度: {input_dim}")
     print(f"EC 类别数: {ec_num_classes}")
@@ -257,7 +314,8 @@ def main():
     # 加载数据
     train_loader, val_loader, test_loader = load_data(
         args.train_data, args.val_data, args.test_data,
-        args.batch_size, args.num_workers
+        args.batch_size, args.num_workers,
+        embedding_method=args.embedding
     )
     
     # 创建模型

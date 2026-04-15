@@ -40,6 +40,10 @@ DEFAULT_EMBEDDING = "esm2_8M"  # 默认使用 ESM2 8M
 
 # ============== 模型相关 ==============
 MODEL_CONFIGS = {
+    "onehot": {
+        "embedding_dim": 20,
+        "max_length": 10000,
+    },
     "esm2_8M": {
         "model_name": "facebook/esm2_t6_8M_UR50D",
         "embedding_dim": 320,

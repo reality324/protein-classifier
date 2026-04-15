@@ -45,21 +45,36 @@ class ProteinClassifierPredictor:
         """加载模型"""
         print(f"加载模型: {model_path}")
         
-        checkpoint = torch.load(model_path, map_location=self.device)
-        args = checkpoint.get('args', {})
+        checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+        raw_args = checkpoint.get('args', None)
+        
+        # 处理 args，可能是 Namespace 或 dict
+        if hasattr(raw_args, '__dict__'):
+            self.train_args = vars(raw_args)
+        elif isinstance(raw_args, dict):
+            self.train_args = raw_args
+        else:
+            self.train_args = {}
+        
+        # 先加载编码器获取实际的类别数
+        self.processor = ProteinDataProcessor.load_encoders(DATASETS_DIR)
+        ec_num_classes = len(self.processor.ec_encoder.classes_)
+        loc_num_classes = len(self.processor.loc_encoder.classes_)
+        func_num_classes = len(self.processor.func_encoder.classes_)
         
         # 获取输入维度
+        embedding_key = self.train_args.get('embedding', self.embedding_method)
         input_dim = MODEL_CONFIGS.get(
-            args.get('embedding', self.embedding_method),
+            embedding_key,
             MODEL_CONFIGS['esm2_8M']
         )['embedding_dim']
         
         # 创建模型
         self.model = MultiTaskProteinClassifier(
             input_dim=input_dim,
-            ec_num_classes=args.get('ec_num_classes', 500),
-            loc_num_classes=args.get('loc_num_classes', 30),
-            func_num_classes=args.get('func_num_classes', 50),
+            ec_num_classes=ec_num_classes,
+            loc_num_classes=loc_num_classes,
+            func_num_classes=func_num_classes,
         )
         
         self.model.load_state_dict(checkpoint['model_state_dict'])
@@ -67,6 +82,9 @@ class ProteinClassifierPredictor:
         self.model.eval()
         
         print(f"模型已加载，使用设备: {self.device}")
+        print(f"  EC 类别数: {ec_num_classes}")
+        print(f"  定位类别数: {loc_num_classes}")
+        print(f"  功能类别数: {func_num_classes}")
     
     def _load_encoders(self):
         """加载标签编码器"""

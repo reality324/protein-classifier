@@ -7,12 +7,22 @@ from .metrics import (
     MetricTracker,
     Evaluator,
 )
-from .visualization import (
-    TrainingVisualizer,
-    ConfusionMatrixPlotter,
-    EmbeddingVisualizer,
-    create_summary_report,
-)
+
+# Optional visualization module (requires matplotlib)
+try:
+    from .visualization import (
+        TrainingVisualizer,
+        ConfusionMatrixPlotter,
+        EmbeddingVisualizer,
+        create_summary_report,
+    )
+    _visualization_available = True
+except ImportError:
+    _visualization_available = False
+    TrainingVisualizer = None
+    ConfusionMatrixPlotter = None
+    EmbeddingVisualizer = None
+    create_summary_report = None
 
 __all__ = [
     'calculate_binary_metrics',

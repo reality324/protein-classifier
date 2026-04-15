@@ -5,7 +5,7 @@
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -262,6 +262,263 @@ class LogisticRegressionAlgorithm(BaseAlgorithm):
 
 # ===================== 深度学习算法 =====================
 
+class BayesianLinear(nn.Module):
+    """贝叶斯线性层 (使用 MC Dropout 近似)"""
+    
+    def __init__(self, in_features: int, out_features: int, prior_sigma: float = 1.0):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.prior_sigma = prior_sigma
+        
+        self.weight_mu = nn.Parameter(torch.zeros(out_features, in_features))
+        self.bias_mu = nn.Parameter(torch.zeros(out_features))
+        
+        self.weight_log_sigma = nn.Parameter(torch.zeros(out_features, in_features))
+        self.bias_log_sigma = nn.Parameter(torch.zeros(out_features))
+        
+        self.reset_parameters()
+    
+    def reset_parameters(self):
+        nn.init.kaiming_normal_(self.weight_mu)
+        nn.init.zeros_(self.bias_mu)
+        nn.init.constant_(self.weight_log_sigma, -3.0)
+        nn.init.constant_(self.bias_log_sigma, -3.0)
+    
+    def forward(self, x: torch.Tensor, training: bool = True) -> torch.Tensor:
+        if training:
+            weight = self.weight_mu + torch.exp(self.weight_log_sigma) * torch.randn_like(self.weight_mu)
+            bias = self.bias_mu + torch.exp(self.bias_log_sigma) * torch.randn_like(self.bias_mu)
+        else:
+            weight = self.weight_mu
+            bias = self.bias_mu
+        
+        return nn.functional.linear(x, weight, bias)
+
+
+class BayesianMLP(nn.Module):
+    """贝叶斯多层感知机"""
+    
+    def __init__(
+        self, 
+        input_dim: int, 
+        output_dim: int, 
+        hidden_dims: List[int] = [256, 128],
+        task_type: str = 'multilabel',
+        prior_sigma: float = 1.0,
+        dropout_rate: float = 0.3
+    ):
+        super().__init__()
+        self.task_type = task_type
+        
+        layers = []
+        prev_dim = input_dim
+        
+        for hidden_dim in hidden_dims:
+            layers.append(BayesianLinear(prev_dim, hidden_dim, prior_sigma))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(dropout_rate))
+            prev_dim = hidden_dim
+        
+        layers.append(BayesianLinear(prev_dim, output_dim, prior_sigma))
+        
+        self.network = nn.Sequential(*layers)
+    
+    def forward(self, x: torch.Tensor, training: bool = True) -> torch.Tensor:
+        return self.network(x, training)
+
+
+class BayesianNeuralNetworkAlgorithm(BaseAlgorithm):
+    """贝叶斯神经网络算法 (BNN)
+    
+    使用变分推断近似贝叶斯后验，能够估计预测的不确定性。
+    通过多次采样计算预测均值和方差。
+    """
+    
+    def __init__(
+        self, 
+        config: AlgorithmConfig, 
+        input_dim: int, 
+        output_dim: int, 
+        task_type: str = 'multilabel'
+    ):
+        super().__init__(config)
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.task_type = task_type
+        
+        self.hidden_dims = config.params.get('hidden_dims', [256, 128])
+        self.prior_sigma = config.params.get('prior_sigma', 1.0)
+        self.dropout_rate = config.params.get('dropout_rate', 0.3)
+        self.n_samples = config.params.get('n_samples', 10)  # MC 采样次数
+        self.learning_rate = config.params.get('learning_rate', 0.001)
+        
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = None
+        
+    def _build_model(self) -> nn.Module:
+        """构建贝叶斯神经网络"""
+        model = BayesianMLP(
+            input_dim=self.input_dim,
+            output_dim=self.output_dim,
+            hidden_dims=self.hidden_dims,
+            task_type=self.task_type,
+            prior_sigma=self.prior_sigma,
+            dropout_rate=self.dropout_rate
+        )
+        return model.to(self.device)
+    
+    def fit(self, X: np.ndarray, y: np.ndarray, epochs: int = 50, batch_size: int = 32):
+        self.model = self._build_model()
+        
+        X_tensor = torch.FloatTensor(X).to(self.device)
+        y_tensor = torch.FloatTensor(y).to(self.device)
+        
+        dataset = TensorDataset(X_tensor, y_tensor)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        
+        if self.task_type == 'multilabel':
+            criterion = nn.BCEWithLogitsLoss()
+        else:
+            criterion = nn.NLLLoss()
+        
+        optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        
+        self.model.train()
+        for epoch in range(epochs):
+            total_loss = 0
+            for batch_X, batch_y in dataloader:
+                optimizer.zero_grad()
+                outputs = self.model(batch_X, training=True)
+                
+                if self.task_type == 'multilabel':
+                    loss = criterion(outputs, batch_y)
+                else:
+                    loss = criterion(outputs, batch_y.long())
+                
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+            
+            if (epoch + 1) % 10 == 0:
+                print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(dataloader):.4f}")
+        
+        self.is_fitted = True
+    
+    def predict(self, X: np.ndarray, threshold: float = 0.5, return_uncertainty: bool = False):
+        """预测
+        
+        Args:
+            X: 输入特征
+            threshold: 分类阈值
+            return_uncertainty: 是否返回不确定性估计
+        
+        Returns:
+            predictions: 预测标签
+            uncertainty: (可选) 预测的不确定性
+        """
+        self.model.eval()
+        
+        X_tensor = torch.FloatTensor(X).to(self.device)
+        
+        with torch.no_grad():
+            all_probs = []
+            for _ in range(self.n_samples):
+                outputs = self.model(X_tensor, training=True)
+                if self.task_type == 'multilabel':
+                    probs = torch.sigmoid(outputs)
+                else:
+                    probs = torch.softmax(outputs, dim=1)
+                all_probs.append(probs)
+            
+            all_probs = torch.stack(all_probs, dim=0)  # (n_samples, batch_size, n_classes)
+            
+            mean_probs = torch.mean(all_probs, dim=0)  # (batch_size, n_classes)
+            uncertainty = torch.std(all_probs, dim=0)   # (batch_size, n_classes)
+            
+            if self.task_type == 'multilabel':
+                preds = (mean_probs > threshold).long().cpu().numpy()
+            else:
+                preds = torch.argmax(mean_probs, dim=1).cpu().numpy()
+        
+        if return_uncertainty:
+            return preds, uncertainty.cpu().numpy()
+        return preds
+    
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        """预测概率"""
+        self.model.eval()
+        
+        X_tensor = torch.FloatTensor(X).to(self.device)
+        
+        with torch.no_grad():
+            all_probs = []
+            for _ in range(self.n_samples):
+                outputs = self.model(X_tensor, training=True)
+                if self.task_type == 'multilabel':
+                    probs = torch.sigmoid(outputs)
+                else:
+                    probs = torch.softmax(outputs, dim=1)
+                all_probs.append(probs)
+            
+            mean_probs = torch.mean(torch.stack(all_probs, dim=0), dim=0)
+        
+        return mean_probs.cpu().numpy()
+    
+    def get_uncertainty(self, X: np.ndarray) -> np.ndarray:
+        """获取预测不确定性
+        
+        Returns:
+            std_probs: 每个类别的预测标准差，值越大表示越不确定
+        """
+        self.model.eval()
+        
+        X_tensor = torch.FloatTensor(X).to(self.device)
+        
+        with torch.no_grad():
+            all_probs = []
+            for _ in range(self.n_samples):
+                outputs = self.model(X_tensor, training=True)
+                if self.task_type == 'multilabel':
+                    probs = torch.sigmoid(outputs)
+                else:
+                    probs = torch.softmax(outputs, dim=1)
+                all_probs.append(probs)
+            
+            std_probs = torch.std(torch.stack(all_probs, dim=0), dim=0)
+        
+        return std_probs.cpu().numpy()
+    
+    def save(self, path: Path):
+        """保存模型"""
+        save_dict = {
+            'model_state': self.model.state_dict(),
+            'config': {
+                'input_dim': self.input_dim,
+                'output_dim': self.output_dim,
+                'hidden_dims': self.hidden_dims,
+                'task_type': self.task_type,
+                'prior_sigma': self.prior_sigma,
+                'dropout_rate': self.dropout_rate,
+            }
+        }
+        torch.save(save_dict, path)
+    
+    def load(self, path: Path):
+        """加载模型"""
+        save_dict = torch.load(path, map_location=self.device)
+        self.input_dim = save_dict['config']['input_dim']
+        self.output_dim = save_dict['config']['output_dim']
+        self.hidden_dims = save_dict['config']['hidden_dims']
+        self.task_type = save_dict['config']['task_type']
+        self.prior_sigma = save_dict['config']['prior_sigma']
+        self.dropout_rate = save_dict['config']['dropout_rate']
+        
+        self.model = self._build_model()
+        self.model.load_state_dict(save_dict['model_state'])
+        self.is_fitted = True
+
+
 class NeuralNetworkAlgorithm(BaseAlgorithm):
     """神经网络算法"""
 
@@ -386,6 +643,7 @@ class AlgorithmFactory:
         'svm': SVMAlgorithm,
         'logistic_regression': LogisticRegressionAlgorithm,
         'neural_network': NeuralNetworkAlgorithm,
+        'bnn': BayesianNeuralNetworkAlgorithm,
     }
 
     @classmethod
@@ -404,10 +662,10 @@ class AlgorithmFactory:
         config = AlgorithmConfig(name=name, type='traditional', params=params)
         algorithm_cls = cls._ALGORITHMS[name]
 
-        if name == 'neural_network':
+        if name == 'neural_network' or name == 'bnn':
             if input_dim is None or output_dim is None:
-                raise ValueError("Neural network requires input_dim and output_dim")
-            return NeuralNetworkAlgorithm(config, input_dim, output_dim, task_type)
+                raise ValueError(f"{name} requires input_dim and output_dim")
+            return algorithm_cls(config, input_dim, output_dim, task_type)
 
         return algorithm_cls(config)
 
@@ -463,7 +721,7 @@ class AlgorithmComparator:
                 import time
                 start_time = time.time()
 
-                if algo_name == 'neural_network':
+                if algo_name == 'neural_network' or algo_name == 'bnn':
                     algo.fit(X_train, y_train, epochs=50, batch_size=32)
                 else:
                     algo.fit(X_train, y_train)
@@ -635,7 +893,7 @@ def main():
                        default=str(DATASETS_DIR / 'test.parquet'),
                        help='测试数据路径')
     parser.add_argument('--algorithms', '-a', nargs='+',
-                       default=['random_forest', 'xgboost', 'neural_network'],
+                       default=['random_forest', 'xgboost', 'neural_network', 'bnn'],
                        help='要对比的算法')
     parser.add_argument('--task', type=str, default='location',
                        choices=['ec', 'location', 'function'],

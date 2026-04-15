@@ -93,8 +93,8 @@ def main():
 
     # 算法
     parser.add_argument('--algorithms', '-a', nargs='+',
-                       default=['random_forest', 'logistic_regression', 'neural_network'],
-                       choices=['random_forest', 'xgboost', 'svm', 'logistic_regression', 'neural_network'],
+                       default=['random_forest', 'logistic_regression', 'neural_network', 'bnn'],
+                       choices=['random_forest', 'xgboost', 'svm', 'logistic_regression', 'neural_network', 'bnn'],
                        help='要对比的算法')
 
     # 任务
