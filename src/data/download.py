@@ -58,9 +58,11 @@ class UniProtDownloader:
     
     def parse_dat_file(self, dat_file: Path) -> pd.DataFrame:
         """解析 UniProt .dat 文件
-        
+
         提取: ID, 序列, EC号, GO terms, 细胞定位
         """
+        import re
+        
         records = []
         current_record = {}
         
@@ -78,15 +80,13 @@ class UniProtDownloader:
                     current_record['AC'] = line[5:].strip()
                     
                 elif line.startswith('SQ   '):
-                    # 序列开始，统计长度
+                    # 序列开始标记
                     pass
-                    
-                elif line.startswith('    '):
-                    # 序列行
-                    if 'sequence' not in current_record:
-                        current_record['sequence'] = ''
+
+                elif line.startswith('    ') and 'sequence' not in current_record:
+                    # 序列行（缩进，不含空格的其他内容）
                     seq = line.strip().replace(' ', '')
-                    current_record['sequence'] += seq
+                    current_record['sequence'] = seq
                     
                 elif line.startswith('DE   '):
                     if 'description' not in current_record:
@@ -105,31 +105,51 @@ class UniProtDownloader:
                     current_record['organism_class'] += line[5:].strip() + ' '
                     
                 elif line.startswith('DR   '):
-                    # 参考文献/交叉引用
+                    # GO 注释 (DR   GO; GO:0001234; ...)
+                    if 'go_terms' not in current_record:
+                        current_record['go_terms'] = []
+                    if 'GO; GO:' in line:
+                        parts = line.split(';')
+                        if len(parts) >= 2:
+                            go = parts[1].strip()
+                            if go:
+                                current_record['go_terms'].append(go)
+                    
+                elif line.startswith('CC   -!- CATALYTIC ACTIVITY:'):
+                    # EC号在CATALYTIC ACTIVITY注释中
                     if 'ec_numbers' not in current_record:
                         current_record['ec_numbers'] = []
-                        current_record['go_terms'] = []
+                    current_record['_cc_buffer'] = line[5:].strip()
                     
-                    # EC 编号
-                    if 'EC; ' in line:
-                        ec = line.split('EC; ')[1].split(';')[0].strip()
-                        if ec and ec != '-':
-                            current_record['ec_numbers'].append(ec)
+                elif line.startswith('CC   -!- FUNCTION:'):
+                    if 'ec_numbers' not in current_record:
+                        current_record['ec_numbers'] = []
+                    current_record['_cc_buffer'] = line[5:].strip()
                     
-                    # GO 注释
-                    if 'GO; ' in line:
-                        go = line.split('GO; ')[1].split(';')[0].strip()
-                        if go:
-                            current_record['go_terms'].append(go)
-                    
-                    # UniRef/CDD 等
-                    pass
-                    
-                elif line.startswith('CC   -!- SUBUNIT:') or \
-                     line.startswith('CC   -!- SUBCELLULAR LOCATION:'):
+                elif line.startswith('CC       Reaction='):
+                    # Reaction行包含EC号，格式：EC 1.2.3.4 或 EC=1.2.3.4
+                    if '_cc_buffer' in current_record:
+                        reaction_text = line[5:].strip()
+                        ec_patterns = re.findall(r'EC\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)', reaction_text, re.IGNORECASE)
+                        ec_patterns2 = re.findall(r'EC=([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)', reaction_text, re.IGNORECASE)
+                        for ec in ec_patterns + ec_patterns2:
+                            if ec not in current_record['ec_numbers']:
+                                current_record['ec_numbers'].append(ec)
+                                
+                elif line.startswith('CC   -!- SUBCELLULAR LOCATION:'):
                     if 'subcellular' not in current_record:
                         current_record['subcellular'] = ''
                     current_record['subcellular'] += line[5:].strip() + ' '
+                    current_record['_cc_subcellular_continue'] = True
+                    
+                elif line.startswith('CC       ') and current_record.get('_cc_subcellular_continue'):
+                    current_record['subcellular'] += line[5:].strip() + ' '
+                    
+                elif line.startswith('CC   -!-'):
+                    if '_cc_subcellular_continue' in current_record:
+                        del current_record['_cc_subcellular_continue']
+                    if '_cc_buffer' in current_record:
+                        del current_record['_cc_buffer']
                     
                 elif line.startswith('KW   '):
                     if 'keywords' not in current_record:
@@ -144,6 +164,11 @@ class UniProtDownloader:
         
         # 转换为 DataFrame
         df = pd.DataFrame(records)
+        
+        # 清理临时字段
+        for col in ['_cc_buffer', '_cc_subcellular_continue']:
+            if col in df.columns:
+                df = df.drop(col, axis=1)
         
         # 处理列表字段
         for col in ['ec_numbers', 'go_terms', 'keywords']:

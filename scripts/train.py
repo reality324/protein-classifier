@@ -81,54 +81,122 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
+def compute_class_weights(labels: np.ndarray) -> torch.Tensor:
+    """计算类别权重（基于正样本频率）"""
+    # labels: (n_samples, n_classes) 多标签 one-hot 矩阵
+    # 使用逆频率: weight = neg_samples / pos_samples
+    pos_counts = labels.sum(axis=0)  # 每个类别的正样本数
+    neg_counts = len(labels) - pos_counts  # 负样本数
+
+    # 避免除零
+    pos_counts = np.maximum(pos_counts, 1)
+
+    # 计算权重: 负样本数 / 正样本数
+    weights = neg_counts / pos_counts
+
+    # 归一化到 [1, max_weight] 范围，避免权重过大
+    weights = np.clip(weights, 1, weights.max())
+
+    return torch.FloatTensor(weights)
+
+
+def compute_pos_weights(train_df) -> Dict[str, torch.Tensor]:
+    """计算所有任务的正样本权重"""
+    pos_weights = {}
+
+    # EC 多标签权重
+    if 'ec_encoded' in train_df.columns:
+        ec_labels = np.stack(train_df['ec_encoded'].values)
+        pos_weights['ec'] = compute_class_weights(ec_labels)
+        print(f"EC 正样本权重 - 最小值: {pos_weights['ec'].min():.2f}, 最大值: {pos_weights['ec'].max():.2f}")
+
+    # 定位单标签 - 计算类别权重（不平衡数据）
+    if 'loc_encoded' in train_df.columns:
+        loc_labels = train_df['loc_encoded'].values
+        # 统计每个类别的样本数
+        unique_classes = np.unique(loc_labels)
+        class_counts = np.array([(loc_labels == c).sum() for c in unique_classes])
+        # 权重 = 总样本数 / (类别数 × 该类样本数)
+        loc_weights = len(loc_labels) / (len(unique_classes) * class_counts)
+        # 映射到原始类别顺序
+        loc_weight_tensor = torch.ones(int(loc_labels.max()) + 1)
+        for idx, cls in enumerate(unique_classes):
+            loc_weight_tensor[int(cls)] = loc_weights[idx]
+        pos_weights['loc'] = loc_weight_tensor
+        print(f"定位类别权重 - 最小: {pos_weights['loc'].min():.2f}, 最大: {pos_weights['loc'].max():.2f}")
+
+    # 功能多标签权重（限制最大值避免梯度爆炸）
+    if 'func_encoded' in train_df.columns:
+        func_labels = np.stack(train_df['func_encoded'].values)
+        func_weights = compute_class_weights(func_labels)
+        # 限制最大权重为 50，避免梯度爆炸
+        func_weights = torch.clamp(func_weights, 1, 50)
+        pos_weights['func'] = func_weights
+        print(f"功能正样本权重 - 最小值: {pos_weights['func'].min():.2f}, 最大值: {pos_weights['func'].max():.2f}")
+
+    return pos_weights
+
+
 def load_data(train_path, val_path, test_path, batch_size, num_workers, embedding_method='onehot'):
-    """加载数据集"""
-    print("加载数据集...")
-    
+    """加载数据集（直接加载预计算的特征）"""
+    print("加载预计算的特征...")
+
     import pandas as pd
-    from src.data.featurization import get_feature_extractor
-    
-    # 读取数据
+    from src.data.dataset import ProteinDataset
+
+    # 特征文件路径
+    features_dir = Path(train_path).parent.parent / "processed" / embedding_method
+    train_features_path = features_dir / "train_features.npy"
+    val_features_path = features_dir / "val_features.npy"
+    test_features_path = features_dir / "test_features.npy"
+
+    # 检查特征文件是否存在
+    if not train_features_path.exists():
+        raise FileNotFoundError(
+            f"特征文件不存在: {train_features_path}\n"
+            f"请先运行: python scripts/prepare_data.py --extract_features --embedding {embedding_method}"
+        )
+
+    # 加载特征
+    train_features = np.load(train_features_path)
+    val_features = np.load(val_features_path)
+    test_features = np.load(test_features_path)
+
+    print(f"加载特征 - Train: {train_features.shape}, Val: {val_features.shape}, Test: {test_features.shape}")
+
+    # 读取元数据
     train_df = pd.read_parquet(train_path)
     val_df = pd.read_parquet(val_path)
     test_df = pd.read_parquet(test_path)
-    
-    # 提取特征
-    print(f"提取 {embedding_method} 特征...")
-    extractor = get_feature_extractor(embedding_method)
-    
-    train_features = extractor.extract(train_df['sequence'].tolist())
-    val_features = extractor.extract(val_df['sequence'].tolist())
-    test_features = extractor.extract(test_df['sequence'].tolist())
-    
+
     # 创建数据集
     train_dataset = ProteinDataset(
         features=train_features,
         ec_labels=np.stack(train_df['ec_encoded'].values) if 'ec_encoded' in train_df.columns else None,
         loc_labels=train_df['loc_encoded'].values if 'loc_encoded' in train_df.columns else None,
         func_labels=np.stack(train_df['func_encoded'].values) if 'func_encoded' in train_df.columns else None,
-        sequences=train_df['sequence'].tolist(),
+        sequences=train_df['sequence'].tolist() if 'sequence' in train_df.columns else None,
         ids=train_df['id'].tolist(),
     )
-    
+
     val_dataset = ProteinDataset(
         features=val_features,
         ec_labels=np.stack(val_df['ec_encoded'].values) if 'ec_encoded' in val_df.columns else None,
         loc_labels=val_df['loc_encoded'].values if 'loc_encoded' in val_df.columns else None,
         func_labels=np.stack(val_df['func_encoded'].values) if 'func_encoded' in val_df.columns else None,
-        sequences=val_df['sequence'].tolist(),
+        sequences=val_df['sequence'].tolist() if 'sequence' in val_df.columns else None,
         ids=val_df['id'].tolist(),
     )
-    
+
     test_dataset = ProteinDataset(
         features=test_features,
         ec_labels=np.stack(test_df['ec_encoded'].values) if 'ec_encoded' in test_df.columns else None,
         loc_labels=test_df['loc_encoded'].values if 'loc_encoded' in test_df.columns else None,
         func_labels=np.stack(test_df['func_encoded'].values) if 'func_encoded' in test_df.columns else None,
-        sequences=test_df['sequence'].tolist(),
+        sequences=test_df['sequence'].tolist() if 'sequence' in test_df.columns else None,
         ids=test_df['id'].tolist(),
     )
-    
+
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True,
         num_workers=num_workers, pin_memory=True
@@ -141,11 +209,11 @@ def load_data(train_path, val_path, test_path, batch_size, num_workers, embeddin
         test_dataset, batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True
     )
-    
+
     print(f"训练集: {len(train_dataset)} 样本")
     print(f"验证集: {len(val_dataset)} 样本")
     print(f"测试集: {len(test_dataset)} 样本")
-    
+
     return train_loader, val_loader, test_loader
 
 
@@ -156,6 +224,7 @@ def train_epoch(
     optimizer,
     device,
     metric_tracker: MetricTracker,
+    pos_weights: Optional[Dict[str, torch.Tensor]] = None,
 ) -> Dict[str, float]:
     """训练一个 epoch"""
     model.train()
@@ -177,8 +246,8 @@ def train_epoch(
         optimizer.zero_grad()
         outputs = model(features)
         
-        # 计算损失
-        loss, task_losses = criterion(outputs, targets)
+        # 计算损失（传递正样本权重）
+        loss, task_losses = criterion(outputs, targets, pos_weights=pos_weights)
         
         # 反向传播
         loss.backward()
@@ -207,6 +276,7 @@ def validate(
     criterion,
     device,
     evaluator: Evaluator,
+    pos_weights: Optional[Dict[str, torch.Tensor]] = None,
 ) -> Dict[str, float]:
     """验证"""
     model.eval()
@@ -224,7 +294,7 @@ def validate(
         }
         
         outputs = model(features)
-        loss, task_losses = criterion(outputs, targets)
+        loss, task_losses = criterion(outputs, targets, pos_weights=pos_weights)
         
         total_loss += loss.item()
         n_batches += 1
@@ -310,14 +380,19 @@ def main():
     print(f"EC 类别数: {ec_num_classes}")
     print(f"定位类别数: {loc_num_classes}")
     print(f"功能类别数: {func_num_classes}")
-    
+
     # 加载数据
     train_loader, val_loader, test_loader = load_data(
         args.train_data, args.val_data, args.test_data,
         args.batch_size, args.num_workers,
         embedding_method=args.embedding
     )
-    
+
+    # 计算正样本权重（处理标签不平衡）
+    print("\n计算类别权重...")
+    pos_weights = compute_pos_weights(train_df)
+    print(f"权重计算完成")
+
     # 创建模型
     print("\n创建模型...")
     model = create_model(
@@ -348,7 +423,7 @@ def main():
     
     # 学习率调度器
     scheduler = ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=5, verbose=True
+        optimizer, mode='min', factor=0.5, patience=5
     )
     
     # 评估器
@@ -369,16 +444,18 @@ def main():
         print(f"Epoch {epoch+1}/{args.epochs}")
         print(f"{'='*60}")
         
-        # 训练
+        # 训练（传递正样本权重）
         train_metrics = train_epoch(
             model, train_loader, criterion, optimizer, device,
-            MetricTracker(['ec', 'loc', 'func'])
+            MetricTracker(['ec', 'loc', 'func']),
+            pos_weights=pos_weights
         )
         
-        # 验证
+        # 验证（传递正样本权重）
         evaluator.reset()
         val_metrics = validate(
-            model, val_loader, criterion, device, evaluator
+            model, val_loader, criterion, device, evaluator,
+            pos_weights=pos_weights
         )
         
         # 计算验证集评估指标
@@ -431,7 +508,7 @@ def main():
     print("测试最佳模型...")
     print("="*60)
     
-    checkpoint = torch.load(Path(args.save_dir) / 'best_model.pt')
+    checkpoint = torch.load(Path(args.save_dir) / 'best_model.pt', weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     
     evaluator.reset()

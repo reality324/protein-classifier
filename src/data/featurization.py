@@ -140,13 +140,23 @@ class ESMFeatureExtractor(ProteinFeatureExtractor):
         self._load_model()
     
     def _load_model(self):
-        """加载模型"""
+        """加载模型（支持本地路径和 HuggingFace 远程）"""
         print(f"加载 ESM 模型: {self.model_name}")
-        self.tokenizer = EsmTokenizer.from_pretrained(self.model_name)
-        self.model = EsmModel.from_pretrained(self.model_name)
+
+        # 判断是否为本地路径
+        if os.path.isdir(self.model_name):
+            print(f"检测到本地模型路径，从本地加载...")
+            self.tokenizer = EsmTokenizer.from_pretrained(self.model_name, local_files_only=True)
+            self.model = EsmModel.from_pretrained(self.model_name, local_files_only=True)
+        else:
+            print(f"从 HuggingFace 下载模型...")
+            self.tokenizer = EsmTokenizer.from_pretrained(self.model_name)
+            self.model = EsmModel.from_pretrained(self.model_name)
+
         self.model.to(self.device)
         self.model.eval()
         print(f"模型已加载，设备: {self.device}")
+        print(f"嵌入维度: {self.embedding_dim}")
     
     def extract(self, sequences: List[str]) -> np.ndarray:
         """提取 ESM2 嵌入

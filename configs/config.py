@@ -45,12 +45,12 @@ MODEL_CONFIGS = {
         "max_length": 10000,
     },
     "esm2_8M": {
-        "model_name": "facebook/esm2_t6_8M_UR50D",
-        "embedding_dim": 320,
+        "model_name": "/home/tianwangcong/ProteinClassifier/models/esm2_t12_35M_UR50D",
+        "embedding_dim": 480,
         "max_length": 1024,
     },
     "esm2_35M": {
-        "model_name": "facebook/esm2_t12_35M_UR50D",
+        "model_name": "/home/tianwangcong/ProteinClassifier/models/esm2_t12_35M_UR50D",
         "embedding_dim": 480,
         "max_length": 1024,
     },
