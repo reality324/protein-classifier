@@ -19,10 +19,9 @@ ProteinClassifier/
 │           ├── test_features.npy
 │           └── train_labels.npy
 │
-├── models/                       # Trained models
-│   ├── mlp_ec_first.pt           # MLP model (89.60%)
-│   ├── bnn_ec_first.pt           # BNN model (88.72%)
-│   └── combined_model.pt        # Multi-task model
+├── models/                       # Trained models (8K ESM2 balanced dataset)
+│   ├── mlp_multitask.pt          # MLP model (89.12% EC accuracy)
+│   └── bnn_multitask.pt          # BNN model
 │
 ├── experiments/
 │   ├── MLP/                      # MLP experiment results
@@ -75,13 +74,13 @@ ProteinClassifier/
 | EC6-Ligases | **0.98** | 0.97 | 0.96 | 0.97 |
 | EC7-Translocases | 0.96 | 0.96 | 0.97 | **0.98** |
 
-### Multi-task Model (MultiTask)
+### Multi-task Model Performance (8K ESM2 Balanced Dataset)
 
-| Task | F1 (micro) | F1 (macro) |
-|------|-------------|------------|
-| EC Classification (8 classes) | 89.12% | - |
-| Localization Classification (11 classes) | 78.44% | 48.05% |
-| Function Classification (17 classes) | 86.43% | 61.74% |
+| Task | Accuracy/F1 (micro) | F1 (macro) | Classes |
+|------|---------------------|------------|---------|
+| EC Classification | **89.12%** | - | 8 (EC 0-7) |
+| Localization Classification | 78.44% | 48.05% | 11 |
+| Function Classification | 86.43% | 61.74% | 17 |
 
 ## Quick Start
 
@@ -122,12 +121,14 @@ python scripts/predict.py
 - Total samples: ~570K proteins
 - Labeled: ~350K entries
 
-### Balanced Dataset
+### Balanced Dataset (ESM2-35M)
 
-- Training set: 8,000 samples (1,000 per EC class)
-- Validation set: 4,000 samples
-- Test set: 4,000 samples
-- Features: ESM2-35M 480-dimensional embeddings
+| Split | Samples | Notes |
+|-------|---------|-------|
+| Training set | 8,000 | 1,000 per EC class (0-7) |
+| Validation set | 4,000 | 500 per EC class |
+| Test set | 4,000 | 500 per EC class |
+| Features | 480-dim | ESM2-35M embeddings |
 
 ### Label Classes
 
@@ -139,7 +140,8 @@ python scripts/predict.py
 
 ## Feature Extraction
 
-- **Model**: ESM-2 (35M parameters)
+- **Model**: ESM-2 (facebook/esm2_t6_8M_UR50D)
+- **Source**: HuggingFace auto-download
 - **Dimension**: 480
 - **Max Sequence Length**: 1024
 
@@ -147,10 +149,13 @@ python scripts/predict.py
 
 | Config | Value |
 |--------|-------|
-| Parameters | 35M |
+| Model ID | facebook/esm2_t6_8M_UR50D |
 | Embedding Dimension | 480 |
-| Transformer Layers | 12 |
+| Transformer Layers | 6 |
 | Attention Heads | 8 |
+| Parameters | ~8M |
+
+> Note: ESM-2 model parameters are automatically downloaded from HuggingFace on first use. No manual parameter file configuration required.
 
 ## Hardware Requirements
 
@@ -196,12 +201,12 @@ Performance comparison plots are saved in `experiments/`:
 import torch
 import numpy as np
 
-# Load model
-mlp = torch.load("models/mlp_ec_first.pt")
+# Load multi-task model (BNN or MLP)
+model = torch.load("models/bnn_multitask.pt")
 
 # Load features
 X = np.load("data/processed/esm2_balanced/test_features.npy")
 
 # Prediction
-# ... (see predict.py for details)
+# ... (see scripts/predict.py for details)
 ```
