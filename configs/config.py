@@ -1,132 +1,211 @@
-"""
-ProteinClassifier 配置文件
-"""
-import os
+"""统一配置中心 - 所有路径、参数、可用编码和算法都集中管理"""
 from pathlib import Path
+from dataclasses import dataclass, field
+from typing import Optional
 
-# 项目根目录
-ROOT_DIR = Path("/home/tianwangcong/ProteinClassifier")
-DATA_DIR = ROOT_DIR / "data"
-MODELS_DIR = ROOT_DIR / "models"
-LOGS_DIR = ROOT_DIR / "logs"
-
-# 创建目录
-for dir_path in [DATA_DIR, MODELS_DIR, LOGS_DIR]:
-    os.makedirs(dir_path, exist_ok=True)
-
-# ============== 数据相关 ==============
-# 数据目录
-RAW_DATA_DIR = DATA_DIR / "raw"
+# ============== 基础路径 ==============
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
+RAW_DATA_DIR = DATA_DIR / "datasets"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
-DATASETS_DIR = DATA_DIR / "datasets"
+MODELS_DIR = PROJECT_ROOT / "models"
+RESULTS_DIR = PROJECT_ROOT / "results"
 
-# UniProt 数据源
-UNIPROT_URLS = {
-    "sprot": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.dat.gz",
-    "trembl": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_trembl.dat.gz",
+# ============== 多任务分类配置 ==============
+# 三个任务: EC主类预测 + 细胞定位预测 + 分子功能预测
+
+MULTITASK_CONFIG = {
+    "task_type": "multi-task",  # multi-task | single-task
+    "tasks": {
+        "ec": {
+            "name": "EC主类",
+            "num_classes": 6,
+            "class_names": [
+                "EC1-氧化还原酶",    # 1.x.x.x
+                "EC2-转移酶",       # 2.x.x.x
+                "EC3-水解酶",       # 3.x.x.x
+                "EC4-裂解酶",       # 4.x.x.x
+                "EC5-异构酶",       # 5.x.x.x
+                "EC6-连接酶",       # 6.x.x.x
+            ],
+            "description": "酶学分类 - 按催化反应类型"
+        },
+        "localization": {
+            "name": "细胞定位",
+            "num_classes": 11,
+            "class_names": [
+                "Cell_Wall", "Cytoplasm", "ER", "Golgi",
+                "Lysosome", "Membrane", "Mitochondria", "Nucleus",
+                "Peroxisome", "Plasma", "Secreted"
+            ],
+            "description": "细胞内定位 - 蛋白质在细胞中的位置"
+        },
+        "function": {
+            "name": "分子功能",
+            "num_classes": 17,
+            "class_names": [
+                "Antioxidant", "Binding", "Enzyme", "Hydrolase",
+                "Isomerase", "Kinase", "Ligase", "Lyase", "Motor",
+                "Oxidoreductase", "Protease", "Signaling", "Structural",
+                "Transcription", "Transferase", "Translocase", "Transporter"
+            ],
+            "description": "分子功能 - 蛋白质执行的功能"
+        }
+    }
 }
 
-# ============== 特征相关 ==============
-# 嵌入方法选择
-EMBEDDING_METHODS = {
-    "onehot": 1,
-    "esm2_8M": 2,      # ESM2 8M 参数
-    "esm2_35M": 3,     # ESM2 35M 参数
-    "esm2_150M": 4,    # ESM2 150M 参数
-    "protbert": 5,     # ProtBERT
-}
-
-DEFAULT_EMBEDDING = "esm2_8M"  # 默认使用 ESM2 8M
-
-# ============== 模型相关 ==============
-MODEL_CONFIGS = {
-    "onehot": {
-        "embedding_dim": 20,
-        "max_length": 10000,
-    },
-    "esm2_8M": {
-        "model_name": "/home/tianwangcong/ProteinClassifier/models/esm2_t12_35M_UR50D",
-        "embedding_dim": 480,
-        "max_length": 1024,
-    },
-    "esm2_35M": {
-        "model_name": "/home/tianwangcong/ProteinClassifier/models/esm2_t12_35M_UR50D",
-        "embedding_dim": 480,
-        "max_length": 1024,
-    },
-    "esm2_150M": {
-        "model_name": "facebook/esm2_t30_150M_UR50D",
-        "embedding_dim": 640,
-        "max_length": 1024,
-    },
-    "protbert": {
-        "model_name": "Rostlab/prot_bert",
-        "embedding_dim": 1024,
-        "max_length": 1024,
-    },
-}
-
-# 分类器配置
-CLASSIFIER_CONFIGS = {
-    "task1_ec": {
-        "name": "EC Number Prediction",
-        "type": "multi_label",  # 多标签分类
-        "num_classes": None,    # 动态确定
-        "hidden_dims": [512, 256],
-        "dropout": 0.3,
-    },
-    "task2_function": {
-        "name": "Protein Function Prediction",
-        "type": "multi_class",  # 多分类
-        "num_classes": None,
-        "hidden_dims": [256, 128],
-        "dropout": 0.3,
-    },
-    "task3_localization": {
-        "name": "Subcellular Localization Prediction",
-        "type": "multi_class",
-        "num_classes": None,
-        "hidden_dims": [256, 128],
-        "dropout": 0.3,
-    },
-}
-
-# ============== 训练相关 ==============
-TRAIN_CONFIG = {
-    "batch_size": 32,
-    "epochs": 100,
-    "learning_rate": 1e-4,
-    "weight_decay": 1e-5,
-    "patience": 10,           # 早停耐心值
-    "validation_split": 0.2,
-    "test_split": 0.1,
+# 兼容旧配置 - 默认使用 EC 主类任务
+DATASET_CONFIG = {
+    "name": "protein_classification",
+    "num_classes": 6,  # EC1-6 六大类
+    "task": "multiclass",
+    "class_names": MULTITASK_CONFIG["tasks"]["ec"]["class_names"],
+    "train_ratio": 0.6,
+    "val_ratio": 0.2,
+    "test_ratio": 0.2,
     "random_seed": 42,
 }
 
-# ============== 评估指标 ==============
-METRICS = {
-    "binary": ["accuracy", "precision", "recall", "f1", "roc_auc"],
-    "multi_class": ["accuracy", "precision_macro", "recall_macro", "f1_macro"],
-    "multi_label": ["accuracy", "precision_macro", "recall_macro", "f1_macro", "roc_auc_macro"],
+# 任务列表
+ALL_TASKS = list(MULTITASK_CONFIG["tasks"].keys())
+
+# ============== 编码方式配置 ==============
+@dataclass
+class EncodingConfig:
+    name: str
+    dim: int
+    description: str
+    requires_gpu: bool = False
+    requires_model_download: bool = False
+
+ENCODINGS = {
+    "onehot": EncodingConfig(
+        name="onehot",
+        dim=20,
+        description="氨基酸单热编码 (Amino Acid Composition)",
+    ),
+    "ctd": EncodingConfig(
+        name="ctd",
+        dim=147,
+        description="组成-转变-分布编码 (Composition-Transition-Distribution)",
+    ),
+    "esm2": EncodingConfig(
+        name="esm2",
+        dim=480,
+        description="ESM2 预训练语言模型嵌入 (facebook/esm2_t6_8M_UR50D)",
+        requires_gpu=True,
+        requires_model_download=True,
+    ),
 }
 
-# ============== 路径配置 ==============
-FILE_PATHS = {
-    "train_data": DATASETS_DIR / "train.parquet",
-    "val_data": DATASETS_DIR / "val.parquet",
-    "test_data": DATASETS_DIR / "test.parquet",
-    "feature_cache": PROCESSED_DATA_DIR / "features",
-    "ec_label_dict": DATASETS_DIR / "ec_label_dict.npy",
-    "function_label_dict": DATASETS_DIR / "function_label_dict.npy",
-    "localization_label_dict": DATASETS_DIR / "localization_label_dict.npy",
+DEFAULT_ENCODING = "ctd"
+
+# ============== 分类算法配置 ==============
+@dataclass
+class AlgorithmConfig:
+    name: str
+    type: str  # "sklearn" | "pytorch"
+    description: str
+    supports_uncertainty: bool = False
+
+ALGORITHMS = {
+    "rf": AlgorithmConfig(
+        name="rf",
+        type="sklearn",
+        description="Random Forest - 随机森林",
+    ),
+    "xgb": AlgorithmConfig(
+        name="xgb",
+        type="sklearn",
+        description="XGBoost - 梯度提升树",
+    ),
+    "svm": AlgorithmConfig(
+        name="svm",
+        type="sklearn",
+        description="SVM - 支持向量机 (RBF核)",
+    ),
+    "lr": AlgorithmConfig(
+        name="lr",
+        type="sklearn",
+        description="Logistic Regression - 逻辑回归",
+    ),
+    "mlp": AlgorithmConfig(
+        name="mlp",
+        type="pytorch",
+        description="MLP - 多层感知机",
+    ),
+    "bnn": AlgorithmConfig(
+        name="bnn",
+        type="pytorch",
+        description="BNN - 贝叶斯神经网络 (MC Dropout)",
+        supports_uncertainty=True,
+    ),
 }
 
-# 模型保存路径
-MODEL_PATHS = {
-    "isenzyme": MODELS_DIR / "isenzyme_model.h5",
-    "howmany": MODELS_DIR / "howmany_model.h5",
-    "ec": MODELS_DIR / "ec_model.h5",
-    "function": MODELS_DIR / "function_model.h5",
-    "localization": MODELS_DIR / "localization_model.h5",
-    "multi_task": MODELS_DIR / "multi_task_model.h5",
-}
+DEFAULT_ALGORITHM = "rf"
+
+# ============== 训练超参数 ==============
+@dataclass
+class TrainConfig:
+    batch_size: int = 32
+    epochs: int = 100
+    learning_rate: float = 1e-3
+    weight_decay: float = 1e-5
+    patience: int = 15
+    lr_scheduler: str = "plateau"  # plateau | cosine | none
+    early_stopping: bool = True
+
+    # 神经网络专用
+    hidden_dims: list = field(default_factory=lambda: [256, 128])
+    dropout: float = 0.3
+    activation: str = "relu"
+
+    # BNN专用
+    mc_samples: int = 30  # Monte Carlo采样次数
+    kl_weight: float = 0.1  # KL散度权重
+
+    # 传统ML专用
+    n_estimators: int = 200
+    max_depth: Optional[int] = None
+    cv_folds: int = 5
+
+TRAIN_DEFAULTS = TrainConfig()
+
+# ============== ESM2 模型配置 ==============
+@dataclass
+class ESM2Config:
+    model_name: str = "facebook/esm2_t6_8M_UR50D"
+    max_length: int = 1024
+    pooling: str = "mean"  # mean | cls | max
+    device: str = "cuda"  # cuda | cpu
+
+ESM2_DEFAULTS = ESM2Config()
+
+# ============== 实验结果保存 ==============
+@dataclass
+class ExperimentConfig:
+    save_model: bool = True
+    save_predictions: bool = True
+    save_plots: bool = True
+    save_metrics: bool = True
+    verbose: bool = True
+
+EXPERIMENT_DEFAULTS = ExperimentConfig()
+
+# ============== 辅助函数 ==============
+def get_encoding_dim(encoding_name: str) -> int:
+    """获取指定编码方式的特征维度"""
+    if encoding_name not in ENCODINGS:
+        raise ValueError(f"Unknown encoding: {encoding_name}. Available: {list(ENCODINGS.keys())}")
+    return ENCODINGS[encoding_name].dim
+
+def get_algorithm_type(algorithm_name: str) -> str:
+    """获取指定算法的框架类型"""
+    if algorithm_name not in ALGORITHMS:
+        raise ValueError(f"Unknown algorithm: {algorithm_name}. Available: {list(ALGORITHMS.keys())}")
+    return ALGORITHMS[algorithm_name].type
+
+def ensure_dirs():
+    """确保所有必要目录存在"""
+    for d in [DATA_DIR, RAW_DATA_DIR, PROCESSED_DATA_DIR, MODELS_DIR, RESULTS_DIR]:
+        d.mkdir(parents=True, exist_ok=True)

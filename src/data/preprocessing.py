@@ -8,7 +8,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, MultiLabelBinarizer
+from sklearn.preprocessing import LabelEncoder as SklearnLabelEncoder, MultiLabelBinarizer
 import joblib
 
 import sys
@@ -19,7 +19,7 @@ from configs.config import (
 )
 
 
-class LabelEncoder:
+class BaseLabelEncoder:
     """标签编码器基类"""
     
     def __init__(self):
@@ -49,7 +49,7 @@ class LabelEncoder:
         return joblib.load(path)
 
 
-class ECNumberEncoder(LabelEncoder):
+class ECNumberEncoder(BaseLabelEncoder):
     """EC 编号编码器 (支持层级结构)"""
     
     def __init__(self, min_depth: int = 2):
@@ -133,7 +133,7 @@ class ECNumberEncoder(LabelEncoder):
         return hierarchy
 
 
-class LocalizationEncoder(LabelEncoder):
+class LocalizationEncoder(BaseLabelEncoder):
     """细胞定位编码器"""
     
     # 标准化的定位分类
@@ -234,7 +234,7 @@ class LocalizationEncoder(LabelEncoder):
         return encoded
 
 
-class FunctionEncoder(LabelEncoder):
+class FunctionEncoder(BaseLabelEncoder):
     """蛋白质功能编码器 (基于 Keywords)"""
     
     def __init__(self, top_k: int = 50):

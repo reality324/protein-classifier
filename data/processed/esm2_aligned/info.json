@@ -1,0 +1,9 @@
+{
+  "source": "data/datasets/train_subset.parquet",
+  "num_samples": 5000,
+  "train_samples": 3000,
+  "val_samples": 1000,
+  "test_samples": 1000,
+  "embedding_method": "esm2",
+  "embedding_dim": 480
+}

@@ -1,276 +1,179 @@
 #!/usr/bin/env python3
+"""predict.py - 使用训练好的模型进行预测
+
+使用方法:
+    # 单条序列预测
+    python scripts/predict.py --sequence "MVLSPADKTNVKAAWGKVGAHAGEYGAEAL" --model results/ctd_rf.pt
+
+    # 批量预测 (FASTA文件)
+    python scripts/predict.py --fasta proteins.fasta --model results/ctd_rf.pt
+
+    # 指定编码方式和算法
+    python scripts/predict.py --sequence "YOUR_SEQUENCE" --encoding ctd --algorithm rf
 """
-预测脚本 - 使用训练好的模型进行预测
-支持: BNN, MLP, 传统ML模型
-同时预测: EC分类 + 细胞定位 + 蛋白质功能
-"""
-import os
-import sys
 import argparse
+import sys
 from pathlib import Path
-from typing import List, Dict, Optional
-
 import numpy as np
-import pandas as pd
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
-sys.path.append(str(Path(__file__).parent.parent))
-from src.data.featurization import get_feature_extractor
-from src.models.bnn import BayesianMultiTaskMLP
-from src.models.mlp import MultiTaskMLP
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-
-class MultiTaskPredictor:
-    """多任务预测器"""
-    
-    def __init__(
-        self,
-        model_path: Path,
-        embedding_method: str = 'esm2_35M',
-        device: str = None,
-        mc_samples: int = 10
-    ):
-        self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
-        self.embedding_method = embedding_method
-        self.mc_samples = mc_samples
-        
-        self._load_model(model_path)
-    
-    def _load_model(self, model_path: Path):
-        """加载模型"""
-        print(f"加载模型: {model_path}")
-        
-        checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
-        
-        # 获取配置
-        config = checkpoint.get('config', {})
-        class_names = checkpoint.get('class_names', {})
-        model_type = checkpoint.get('model_type', 'mlp')
-        
-        input_dim = config.get('input_dim', 480)
-        output_dims = config.get('output_dims', {'ec': 8, 'loc': 11, 'func': 17})
-        
-        print(f"模型类型: {model_type}")
-        print(f"输入维度: {input_dim}")
-        print(f"输出: EC({output_dims.get('ec')}) + 定位({output_dims.get('loc')}) + 功能({output_dims.get('func')})")
-        
-        # 创建模型
-        if model_type == 'bnn':
-            self.model = BayesianMultiTaskMLP(
-                input_dim=input_dim,
-                output_dims=output_dims,
-                hidden_dims=config.get('hidden_dims', [512, 256]),
-                dropout=config.get('dropout', 0.3)
-            )
-        else:
-            self.model = MultiTaskMLP(
-                input_dim=input_dim,
-                output_dims=output_dims,
-                hidden_dims=config.get('hidden_dims', [512, 256]),
-                dropout=config.get('dropout', 0.3)
-            )
-        
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.model = self.model.to(self.device)
-        self.model.eval()
-        
-        # 保存类别名称
-        self.ec_names = class_names.get('ec', [f'EC{i}' for i in range(output_dims.get('ec', 8))])
-        self.loc_names = class_names.get('loc', [f'Loc{i}' for i in range(output_dims.get('loc', 11))])
-        self.func_names = class_names.get('func', [f'Func{i}' for i in range(output_dims.get('func', 17))])
-        
-        self.is_bnn = model_type == 'bnn'
-        
-        print(f"模型已加载，使用设备: {self.device}")
-        if self.is_bnn:
-            print(f"MC Dropout 采样次数: {self.mc_samples}")
-    
-    @torch.no_grad()
-    def predict(self, sequence: str, threshold: float = 0.5) -> Dict:
-        """预测单条序列"""
-        extractor = get_feature_extractor(self.embedding_method)
-        features = extractor.extract([sequence])
-        features = torch.FloatTensor(features).to(self.device)
-        
-        if self.is_bnn:
-            # BNN: MC Dropout 采样
-            mc_results = self.model.mc_forward(features, n_samples=self.mc_samples)
-            
-            ec_probs = torch.softmax(mc_results['mean']['ec'], dim=1).cpu().numpy()[0]
-            loc_probs = torch.sigmoid(mc_results['mean']['loc']).cpu().numpy()[0]
-            func_probs = torch.sigmoid(mc_results['mean']['func']).cpu().numpy()[0]
-            
-            # 不确定性
-            ec_uncertainty = mc_results['std']['ec'].cpu().numpy()[0]
-            loc_uncertainty = mc_results['std']['loc'].cpu().numpy()[0]
-            func_uncertainty = mc_results['std']['func'].cpu().numpy()[0]
-        else:
-            # MLP: 直接预测
-            outputs = self.model(features)
-            
-            ec_probs = torch.softmax(outputs['ec'], dim=1).cpu().numpy()[0]
-            loc_probs = torch.sigmoid(outputs['loc']).cpu().numpy()[0]
-            func_probs = torch.sigmoid(outputs['func']).cpu().numpy()[0]
-            
-            ec_uncertainty = None
-            loc_uncertainty = None
-            func_uncertainty = None
-        
-        # EC 预测
-        ec_pred_idx = np.argmax(ec_probs)
-        ec_predictions = [(self.ec_names[i], ec_probs[i]) for i in range(len(ec_probs))]
-        ec_predictions.sort(key=lambda x: x[1], reverse=True)
-        
-        # 定位预测
-        loc_mask = loc_probs >= threshold
-        loc_predictions = [(self.loc_names[i], loc_probs[i]) for i in range(len(loc_probs)) if loc_mask[i]]
-        loc_predictions.sort(key=lambda x: x[1], reverse=True)
-        
-        # 功能预测
-        func_mask = func_probs >= threshold
-        func_predictions = [(self.func_names[i], func_probs[i]) for i in range(len(func_probs)) if func_mask[i]]
-        func_predictions.sort(key=lambda x: x[1], reverse=True)
-        
-        result = {
-            'sequence': sequence,
-            'sequence_length': len(sequence),
-            'ec_prediction': self.ec_names[ec_pred_idx],
-            'ec_confidence': ec_probs[ec_pred_idx],
-            'ec_top3': ec_predictions[:3],
-            'location_predictions': loc_predictions[:5],
-            'function_predictions': func_predictions[:10],
-        }
-        
-        if self.is_bnn:
-            result['uncertainty'] = {
-                'ec': ec_uncertainty[ec_pred_idx],
-                'location_avg': loc_uncertainty.mean(),
-                'function_avg': func_uncertainty.mean()
-            }
-        
-        return result
-    
-    @torch.no_grad()
-    def predict_batch(self, sequences: List[str], batch_size: int = 32, threshold: float = 0.5) -> pd.DataFrame:
-        """批量预测"""
-        extractor = get_feature_extractor(self.embedding_method)
-        all_features = extractor._batch_encode(sequences, batch_size)
-        
-        results = []
-        n_samples = len(sequences)
-        
-        for i in range(0, n_samples, batch_size):
-            batch_features = torch.FloatTensor(all_features[i:i+batch_size]).to(self.device)
-            batch_seqs = sequences[i:i+batch_size]
-            
-            if self.is_bnn:
-                mc_results = self.model.mc_forward(batch_features, n_samples=self.mc_samples)
-                ec_probs = torch.softmax(mc_results['mean']['ec'], dim=1).cpu().numpy()
-                loc_probs = torch.sigmoid(mc_results['mean']['loc']).cpu().numpy()
-                func_probs = torch.sigmoid(mc_results['mean']['func']).cpu().numpy()
-            else:
-                outputs = self.model(batch_features)
-                ec_probs = torch.softmax(outputs['ec'], dim=1).cpu().numpy()
-                loc_probs = torch.sigmoid(outputs['loc']).cpu().numpy()
-                func_probs = torch.sigmoid(outputs['func']).cpu().numpy()
-            
-            for j, (ec_p, loc_p, func_p) in enumerate(zip(ec_probs, loc_probs, func_probs)):
-                ec_pred_idx = np.argmax(ec_p)
-                
-                loc_mask = loc_p >= threshold
-                loc_pred = [self.loc_names[k] for k in range(len(loc_p)) if loc_mask[k]]
-                
-                func_mask = func_p >= threshold
-                func_pred = [self.func_names[k] for k in range(len(func_p)) if func_mask[k]]
-                
-                results.append({
-                    'sequence': batch_seqs[j],
-                    'ec_prediction': self.ec_names[ec_pred_idx],
-                    'ec_confidence': ec_p[ec_pred_idx],
-                    'location_predictions': ','.join(loc_pred[:5]),
-                    'function_predictions': ','.join(func_pred[:10]),
-                })
-        
-        return pd.DataFrame(results)
+from src.encodings import EncoderRegistry
+from src.algorithms import ClassifierRegistry
+from src.pipeline import ProteinDataset
+from configs.config import DATASET_CONFIG
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='蛋白质多任务预测')
-    
-    parser.add_argument('--input', '-i', type=str, required=True,
-                        help='输入序列或FASTA文件')
-    parser.add_argument('--fasta', action='store_true',
-                        help='输入是FASTA文件')
-    parser.add_argument('--output', '-o', type=str, default='predictions.tsv',
-                        help='输出文件路径')
-    parser.add_argument('--model', '-m', type=str,
-                        default='models/bnn_multitask.pt',
-                        help='模型文件路径')
-    parser.add_argument('--embedding', '-e', type=str,
-                        default='esm2_35M',
-                        help='嵌入方法')
-    parser.add_argument('--threshold', '-t', type=float, default=0.5,
-                        help='预测阈值')
-    parser.add_argument('--batch_size', '-b', type=int, default=32,
-                        help='批处理大小')
-    parser.add_argument('--mc_samples', type=int, default=10,
-                        help='BNN的MC Dropout采样次数')
-    parser.add_argument('--print', action='store_true',
-                        help='打印详细结果')
-    
+    parser = argparse.ArgumentParser(description="蛋白质分类器: 预测")
+    parser.add_argument("--sequence", "-s", type=str, default=None,
+                        help="单条蛋白质序列")
+    parser.add_argument("--fasta", "-f", type=str, default=None,
+                        help="FASTA 文件路径")
+    parser.add_argument("--model", "-m", type=str, default=None,
+                        help="模型文件路径")
+    parser.add_argument("--encoding", "-e", type=str, default="ctd",
+                        choices=["onehot", "ctd", "esm2"],
+                        help="编码方式")
+    parser.add_argument("--algorithm", "-a", type=str, default="rf",
+                        choices=["rf", "xgb", "svm", "lr", "mlp", "bnn"],
+                        help="分类算法")
+    parser.add_argument("--output", "-o", type=str, default=None,
+                        help="输出文件路径")
+    parser.add_argument("--prob", action="store_true",
+                        help="输出预测概率")
     return parser.parse_args()
+
+
+def predict_single(sequence: str, clf, encoder, class_names: list, output_prob: bool = False):
+    """预测单条序列"""
+    # 编码
+    features = encoder.encode(sequence).reshape(1, -1)
+
+    # 预测
+    pred_class = clf.predict(features)[0]
+    pred_label = class_names[pred_class] if pred_class < len(class_names) else f"Class {pred_class}"
+
+    result = {
+        "sequence": sequence[:50] + "..." if len(sequence) > 50 else sequence,
+        "length": len(sequence),
+        "predicted_class": int(pred_class),
+        "predicted_label": pred_label,
+    }
+
+    if output_prob:
+        probs = clf.predict_proba(features)[0]
+        result["probabilities"] = {
+            class_names[i] if i < len(class_names) else f"Class {i}": float(probs[i])
+            for i in range(len(probs))
+        }
+
+    return result
+
+
+def read_fasta(fasta_path: str):
+    """读取 FASTA 文件"""
+    sequences = []
+    headers = []
+
+    with open(fasta_path, 'r') as f:
+        current_seq = []
+        current_header = None
+
+        for line in f:
+            line = line.strip()
+            if line.startswith('>'):
+                if current_header is not None:
+                    sequences.append(''.join(current_seq))
+                    headers.append(current_header)
+                current_header = line[1:]  # 去掉 '>'
+                current_seq = []
+            else:
+                current_seq.append(line)
+
+        if current_header is not None:
+            sequences.append(''.join(current_seq))
+            headers.append(current_header)
+
+    return headers, sequences
 
 
 def main():
     args = parse_args()
-    
-    predictor = MultiTaskPredictor(
-        model_path=Path(args.model),
-        embedding_method=args.embedding,
-        mc_samples=args.mc_samples
-    )
-    
-    if args.fasta:
-        from Bio import SeqIO
-        records = list(SeqIO.parse(args.input, "fasta"))
-        sequences = [str(rec.seq) for rec in records]
-        ids = [rec.id for rec in records]
-        
-        print(f"从FASTA加载 {len(records)} 条序列")
-        results = predictor.predict_batch(sequences, batch_size=args.batch_size, threshold=args.threshold)
-        results.to_csv(args.output, index=False, sep='\t')
-        print(f"结果已保存: {args.output}")
-    
+
+    # 加载模型
+    clf = None
+    if args.model:
+        print(f"加载模型: {args.model}")
+        # 从文件加载
+        import pickle
+        with open(args.model, 'rb') as f:
+            clf = pickle.load(f)
     else:
-        sequence = args.input.strip()
-        result = predictor.predict(sequence, threshold=args.threshold)
-        
-        print("\n" + "="*60)
+        print(f"创建新分类器: {args.encoding} + {args.algorithm}")
+        clf = ClassifierRegistry.get(args.algorithm)
+
+    # 加载编码器
+    encoder = EncoderRegistry.get(args.encoding)
+
+    # 类别名称
+    class_names = DATASET_CONFIG["class_names"]
+
+    # 预测
+    if args.sequence:
+        # 单条序列
+        result = predict_single(args.sequence, clf, encoder, class_names, args.prob)
+        print("\n" + "=" * 50)
         print("预测结果")
-        print("="*60)
-        print(f"序列长度: {result['sequence_length']}")
-        
-        print(f"\n【EC分类预测】")
-        print(f"  预测类别: {result['ec_prediction']}")
-        print(f"  置信度: {result['ec_confidence']:.4f}")
-        print(f"  Top 3: {', '.join([f'{n}({p:.3f})' for n, p in result['ec_top3']])}")
-        
-        print(f"\n【细胞定位预测】")
-        for name, prob in result['location_predictions'][:3]:
-            print(f"  {name}: {prob:.4f}")
-        
-        print(f"\n【蛋白质功能预测】")
-        for name, prob in result['function_predictions'][:5]:
-            print(f"  {name}: {prob:.4f}")
-        
-        if 'uncertainty' in result:
-            print(f"\n【不确定性估计】(BNN)")
-            print(f"  EC: {result['uncertainty']['ec']:.4f}")
-            print(f"  定位平均: {result['uncertainty']['location_avg']:.4f}")
-            print(f"  功能平均: {result['uncertainty']['function_avg']:.4f}")
+        print("=" * 50)
+        print(f"序列: {result['sequence']}")
+        print(f"长度: {result['length']}")
+        print(f"预测类别: {result['predicted_class']} - {result['predicted_label']}")
+
+        if args.prob and 'probabilities' in result:
+            print("\n各类别概率:")
+            for label, prob in sorted(result['probabilities'].items(), key=lambda x: -x[1]):
+                print(f"  {label:20s}: {prob:.4f}")
+
+    elif args.fasta:
+        # FASTA 文件
+        headers, sequences = read_fasta(args.fasta)
+
+        print(f"读取 {len(sequences)} 条序列")
+
+        results = []
+        for i, (header, seq) in enumerate(zip(headers, sequences)):
+            result = predict_single(seq, clf, encoder, class_names, args.prob)
+            result["header"] = header
+            results.append(result)
+
+            if (i + 1) % 10 == 0:
+                print(f"已处理 {i + 1}/{len(sequences)}")
+
+        # 输出结果
+        print("\n" + "=" * 50)
+        print("预测结果汇总")
+        print("=" * 50)
+
+        for result in results:
+            print(f"\n{result['header']}")
+            print(f"  预测: {result['predicted_class']} - {result['predicted_label']}")
+
+        # 保存结果
+        if args.output:
+            import json
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(output_path, 'w') as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+            print(f"\n结果已保存: {output_path}")
+    else:
+        print("错误: 请提供 --sequence 或 --fasta 参数")
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
