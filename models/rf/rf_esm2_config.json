@@ -1,0 +1,8 @@
+{
+  "algorithm": "RandomForest",
+  "encoding": "esm2",
+  "input_dim": 320,
+  "n_classes": 7,
+  "n_estimators": 200,
+  "max_depth": 15
+}
