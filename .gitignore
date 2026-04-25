@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Python
 __pycache__/
 *.py[cod]
@@ -62,3 +63,33 @@ ECRECer-release/
 .OMERO/
 .pyenv/
 .virtualenvs/
+=======
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Data and model artifacts (large)
+data/raw/
+data/processed/*.pt
+data/interim/*.npz
+models/checkpoints/*.pth
+models/checkpoints/*.pt
+models/artifacts/
+
+# Runtime outputs
+outputs/
+tmp/
+
+# Legacy experiments
+legacy/
+>>>>>>> c83fb10 (refactor: reorganize project layout for github release)
