@@ -1,0 +1,46 @@
+# PyTorch
+torch>=1.10.0
+torchvision>=0.11.0
+
+# Transformers for protein embeddings
+transformers>=4.20.0
+accelerate
+
+# Data processing
+pandas>=1.3.0
+numpy>=1.20.0
+scikit-learn>=0.24.0
+scipy>=1.7.0
+
+# Traditional ML algorithms
+xgboost>=1.5.0
+
+# Deep learning specific
+tensorboard
+tqdm
+ipywidgets
+
+# Logging
+loguru
+pyyaml
+
+# Utilities
+joblib
+pathlib
+urllib3
+requests
+biopython
+
+# API (optional)
+flask>=2.0.0
+flasgger>=0.9.5
+
+# Development
+jupyter
+jupyterlab
+
+# Testing
+pytest>=7.0.0
+
+# Optional: for faster data loading
+pandarallel>=1.6.0

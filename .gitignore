@@ -1,0 +1,95 @@
+<<<<<<< HEAD
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Conda & Virtual environments
+.conda/
+miniconda3/
+Miniconda3-*.sh
+venv/
+env/
+*.env
+
+# Cache
+.cache/
+.cache/
+
+# Data files (large)
+*.dat.gz
+*.csv (except key config files)
+*.npy
+*.pt
+*.pkl
+
+# Model files
+*.bin
+*.pth
+*.pt
+
+# Archives
+*.zip
+*.tar.gz
+*.tar
+
+# Unpackaged source
+src_unpacked/
+
+# Temporary files
+*.tmp
+*.bak
+.bash_history
+.lesshst
+
+# Large directories
+gatk-*/
+openmpi-*/
+gromacs-*/
+ECRECer-release/
+
+# Logs
+*.log
+*.txt (except README, config)
+
+# Hidden dirs to ignore completely
+.azure/
+.ansible/
+.android/
+.jl/
+.OMERO/
+.pyenv/
+.virtualenvs/
+=======
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Data and model artifacts (large)
+data/raw/
+data/processed/*.pt
+data/interim/*.npz
+models/checkpoints/*.pth
+models/checkpoints/*.pt
+models/artifacts/
+
+# Runtime outputs
+outputs/
+tmp/
+
+# Legacy experiments
+legacy/
+>>>>>>> c83fb10 (refactor: reorganize project layout for github release)
