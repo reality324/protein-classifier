@@ -12,6 +12,7 @@ import argparse
 import pickle
 import json
 import time
+import re
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -29,47 +30,48 @@ np.random.seed(RANDOM_SEED)
 
 
 def load_data(data_dir, esm2_dir):
-    """加载数据"""
+    """加载数据
+    
+    注意: 数据划分必须与 generate_esm2_features.py 保持一致 (60/20/20)
+    """
     df = pd.read_parquet(data_dir)
     print(f"    数据集大小: {len(df)} 条")
     
     # 加载ESM2特征
     esm2_train = np.load(esm2_dir / "train_features.npy")
+    esm2_val = np.load(esm2_dir / "val_features.npy")
     esm2_test = np.load(esm2_dir / "test_features.npy")
-    esm2_full = np.vstack([esm2_train, esm2_test])
     
-    n = len(esm2_full)  # 使用ESM2特征的数量作为基准
+    n = len(esm2_train) + len(esm2_val) + len(esm2_test)
     print(f"    ESM2特征: {n} 条")
     
     # 截取对应的数据集
     df = df.iloc[:n]
     
-    # 随机划分
+    # 随机划分 - 必须与 generate_esm2_features.py 完全一致！
     indices = np.arange(n)
     np.random.seed(RANDOM_SEED)
     np.random.shuffle(indices)
     
-    train_end = int(n * 0.8)
+    train_end = int(n * 0.6)
+    val_end = int(n * 0.8)
     train_idx = indices[:train_end]
-    test_idx = indices[train_end:]
+    test_idx = indices[val_end:]
     
-    # 提取标签
-    ec_cols = [c for c in df.columns if c.startswith('ec_')]
+    # 提取标签 - 只选择 one-hot 编码列
+    ec_cols = [c for c in df.columns if re.match(r'^ec_\d+$', c)]
     y_ec_all = np.argmax(df[ec_cols].values, axis=1)
     
-    # EC主类
-    def get_main_class(idx_list):
-        return np.array([
-            int(ec_cols[y_ec_all[i]].split('_')[1].split('.')[0]) - 1
-            for i in idx_list
-        ])
+    # EC主类 (argmax 已经返回 0-6)
+    y_ec_train = y_ec_all[train_idx]
+    y_ec_test = y_ec_all[test_idx]
     
     # Localization
-    loc_cols = [c for c in df.columns if c.startswith('loc_')]
+    loc_cols = [c for c in df.columns if c.startswith('loc_') and c != 'loc_normalized']
     y_loc_all = np.argmax(df[loc_cols].values, axis=1)
     
     # Function
-    func_cols = [c for c in df.columns if c.startswith('func_')]
+    func_cols = [c for c in df.columns if c.startswith('func_') and c != 'func_normalized']
     y_func_all = np.argmax(df[func_cols].values, axis=1)
     
     # 标签名称
@@ -79,6 +81,9 @@ def load_data(data_dir, esm2_dir):
         'function': {i: c.replace('func_', '') for i, c in enumerate(func_cols)},
     }
     
+    # 合并 ESM2 特征
+    esm2_full = np.vstack([esm2_train, esm2_val, esm2_test])
+    
     X_train = esm2_full[train_idx]
     X_test = esm2_full[test_idx]
     
@@ -86,12 +91,12 @@ def load_data(data_dir, esm2_dir):
         'X_train': X_train,
         'X_test': X_test,
         'y_train': {
-            'ec': get_main_class(train_idx),
+            'ec': y_ec_train,
             'localization': y_loc_all[train_idx],
             'function': y_func_all[train_idx],
         },
         'y_test': {
-            'ec': get_main_class(test_idx),
+            'ec': y_ec_test,
             'localization': y_loc_all[test_idx],
             'function': y_func_all[test_idx],
         },
@@ -248,6 +253,7 @@ def save_models(results, data, output_dir):
         }
         del summary['results'][task_name]['rf']['model']
         del summary['results'][task_name]['mlp']['model']
+        del summary['results'][task_name]['mlp']['scaler']
     
     with open(output_dir / "summary.json", 'w') as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)

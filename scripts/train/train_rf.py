@@ -9,6 +9,7 @@ import argparse
 import pickle
 import json
 import time
+import re
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -28,27 +29,26 @@ RANDOM_SEED = 42
 
 
 def load_data(data_dir, esm2_dir, encoding, test_size=0.2):
-    """加载并划分数据"""
+    """加载并划分数据
+    
+    注意: 数据划分必须与 generate_esm2_features.py 保持一致 (60/20/20)
+    """
     df = pd.read_parquet(data_dir)
-    ec_cols = [c for c in df.columns if c.startswith('ec_')]
+    # 只选择 ec_1, ec_2, ... ec_7 这样的 one-hot 编码列
+    ec_cols = [c for c in df.columns if re.match(r'^ec_\d+$', c)]
     y_all = np.argmax(df[ec_cols].values, axis=1)
     
-    # 固定随机划分
+    # 随机划分 - 必须与 generate_esm2_features.py 完全一致！
     indices = np.arange(len(df))
     np.random.seed(RANDOM_SEED)
     np.random.shuffle(indices)
     
     n = len(df)
-    train_end = int(n * (1 - test_size))
-    train_idx = indices[:train_end]
-    test_idx = indices[train_end:]
+    train_end = int(n * 0.6)    # 60%
+    val_end = int(n * 0.8)      # 20%
     
-    # 提取EC主类标签 (1-7 -> 0-6)
-    def get_main_class(idx_list):
-        return np.array([
-            int(ec_cols[y_all[i]].split('_')[1].split('.')[0]) - 1 
-            for i in idx_list
-        ])
+    train_idx = indices[:train_end]   # 0-5374 (5374)
+    test_idx = indices[val_end:]      # 5374-8957 (3583) - 使用后半部分作为测试
     
     # 编码
     if encoding == "esm2":
@@ -59,8 +59,8 @@ def load_data(data_dir, esm2_dir, encoding, test_size=0.2):
         X_train = encoder.encode_batch(df['sequence'].iloc[train_idx].tolist())
         X_test = encoder.encode_batch(df['sequence'].iloc[test_idx].tolist())
     
-    y_train = get_main_class(train_idx)
-    y_test = get_main_class(test_idx)
+    y_train = y_all[train_idx]
+    y_test = y_all[test_idx]
     
     return X_train, X_test, y_train, y_test
 

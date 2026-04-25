@@ -18,6 +18,48 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
+def print_classification_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    class_names: Optional[List[str]] = None,
+    title: str = "分类结果",
+) -> Dict[str, float]:
+    """打印分类结果指标
+    
+    Args:
+        y_true: 真实标签
+        y_pred: 预测标签
+        class_names: 类别名称列表
+        title: 打印标题
+    
+    Returns:
+        指标字典
+    """
+    print(f"\n{'='*60}")
+    print(f"  {title}")
+    print('='*60)
+    
+    # 计算指标
+    metrics = calculate_multiclass_metrics(y_true, y_pred)
+    
+    # 打印总体指标
+    print(f"\n准确率 (Accuracy): {metrics['accuracy']:.4f}")
+    print(f"F1 分数 (Macro): {metrics['f1_macro']:.4f}")
+    print(f"F1 分数 (Weighted): {metrics['f1_weighted']:.4f}")
+    
+    # 打印每个类别的详细信息
+    if class_names:
+        print(f"\n各类别指标:")
+        report = classification_report(y_true, y_pred, target_names=class_names, zero_division=0)
+        print(report)
+    
+    print(f"\n混淆矩阵:")
+    cm = confusion_matrix(y_true, y_pred)
+    print(cm)
+    
+    return metrics
+
+
 def calculate_binary_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
